@@ -6,7 +6,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const allocator = std.heap.page_allocator;
+var allocator: std.mem.Allocator = undefined;
 
 var stdout: std.fs.File.Writer = undefined;
 var stdin: std.fs.File.Reader = undefined;
@@ -43,14 +43,14 @@ var stdin: std.fs.File.Reader = undefined;
 ///////////////////////////////////
 
 //// consts, vars, settings
-var rand: std.rand.Random = undefined;
+var rand: std.Random = undefined;
 
 //// functions
 
 // seed & prep for rng
 pub fn initRNG() !void {
     //rnd setup -- https://ziglearn.org/chapter-2/#random-numbers
-    var prng = std.rand.DefaultPrng.init(blk: {
+    var prng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
         try std.posix.getrandom(std.mem.asBytes(&seed));
         break :blk seed;
@@ -150,18 +150,19 @@ pub fn getTermSz(tty: std.posix.fd_t) !TermSz {
         if (0 == win32.GetConsoleScreenBufferInfo(tty, &info)) switch (std.os.windows.kernel32.GetLastError()) {
             else => |e| return std.os.windows.unexpectedError(e),
         };
+
         return TermSz{
             .height = @intCast(info.srWindow.Bottom - info.srWindow.Top + 1),
             .width = @intCast(info.srWindow.Right - info.srWindow.Left + 1),
         };
     } else {
         //Linux-MacOS Case
-        var winsz = std.c.winsize{ .ws_col = 0, .ws_row = 0, .ws_xpixel = 0, .ws_ypixel = 0 };
+        var winsz = std.posix.winsize{ .col = 0, .row = 0, .xpixel = 0, .ypixel = 0 };
         const rv = std.c.ioctl(tty, TIOCGWINSZ, @intFromPtr(&winsz));
         const err = std.posix.errno(rv);
 
         if (rv >= 0) {
-            return TermSz{ .height = winsz.ws_row, .width = winsz.ws_col };
+            return TermSz{ .height = winsz.row, .width = winsz.col };
         } else {
             std.process.exit(0);
             //TODO this is a pretty terrible way to handle issues...
@@ -559,8 +560,7 @@ pub fn showDoomFire() void {
     const fire_white: u8 = fire_palette.len - 1;
 
     //screen buf default color is black
-    var screen_buf: []u8 = undefined; //{fire_black}**FIRE_SZ;
-    screen_buf = allocator.alloc(u8, FIRE_SZ) catch unreachable;
+    var screen_buf: []u8 = allocator.alloc(u8, FIRE_SZ) catch unreachable;
     defer allocator.free(screen_buf);
 
     //init buffer
@@ -607,11 +607,9 @@ pub fn showDoomFire() void {
     //get to work!
     initBuf();
     defer freeBuf();
-
     //when there is an ez way to poll for key stroke...do that.  for now, ctrl+c!
     const ok = true;
     while (ok) {
-
         //update fire buf
         doFire_x = 0;
         while (doFire_x < FIRE_W) : (doFire_x += 1) {
@@ -686,7 +684,9 @@ pub fn showDoomFire() void {
 pub fn main() anyerror!void {
     stdout = std.io.getStdOut().writer();
     stdin = std.io.getStdIn().reader();
-
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    allocator = gpa.allocator();
+    defer _ = gpa.deinit();
     try initTerm();
     defer complete();
 
